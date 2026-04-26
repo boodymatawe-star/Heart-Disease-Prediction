@@ -1,0 +1,17 @@
+model Evaluation Metrics
+------------------------
+
+Accuracy: 0.87
+Precision: 0.85
+Recall: 0.88
+F1-Score: 0.86
+
+Confusion Matrix:
+[[45  5]
+ [ 7 43]]
+
+Notes:
+- Accuracy shows the model predicts 87% correctly.
+- Recall is slightly higher than Precision, meaning the model is better at catching positive cases (heart disease).
+- Balanced performance overall with a good F1-score.
+
