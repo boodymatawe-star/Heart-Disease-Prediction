@@ -1,162 +1,176 @@
 import streamlit as st
-import joblib
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-import plotly.express as px
-#load the pipeline(model)
-pipeline = joblib.load("final_pipeline.pkl")
-st.title("❤️ Heart Disease Prediction App")
-st.write("Enter patient details below to predict the risk of heart disease.")
-#User Inputs
-age = st.number_input("Age", 20, 100, 50)
+from database import init_db, verify_user, create_user
 
-### ADDED: Input for trestbps (Resting Blood Pressure) ###
-trestbps = st.number_input("Resting Blood Pressure (mm Hg)", 90, 200, 120)
-
-sex = st.selectbox("Sex", ["Male", "Female"])
-chol = st.number_input("Cholesterol (mg/dl)", 100, 600, 200)
-thalch = st.number_input("Max Heart Rate Achieved", 50, 220, 150)
-oldpeak = st.number_input("ST depression (Oldpeak)", 0.0, 6.0, 1.0)
-exang = st.selectbox("Exercise Induced Angina", ["No", "Yes"])
-fbs = st.radio("Fasting Blood Sugar > 120 mg/dl", ["Yes", "No"])
-
-# One-hot encoded features from original script
-cp_non_anginal = st.checkbox("Chest Pain: Non-Anginal")
-cp_typical_angina = st.checkbox("Chest Pain: Typical Angina")
-cp_atypical_angina = st.checkbox("Chest Pain: Atypical Angina")
-abnormality = st.checkbox("Resting ECG: ST-T Abnormality")
-slope_unsloping = st.checkbox("Slope: Upsloping")
-
-
-
-
-### MODIFIED: Combined selection for restecg and slope to correctly generate ALL required one-hot columns ###
-
-# Handle Restecg (Must generate 'restecg_normal' and 'restecg_st-t abnormality' from a single input)
-restecg_option = st.selectbox(
-    "Resting Electrocardiographic Results (Restecg)",
-    ["Normal", "ST-T Abnormality"] # Assuming the third category 'left ventricular hypertrophy' was dropped or is not needed
-)
-# Handle Slope (Must generate 'slope_upsloping' and 'slope_flat' from a single input)
-slope_option = st.selectbox(
-    "Slope of the peak exercise ST segment",
-    ["Upsloping", "Flat"] # Assuming the third category 'downsloping' was dropped or is not needed
+# Must be the very first Streamlit call
+st.set_page_config(
+    page_title="CardioPredict",
+    page_icon="❤️",
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-# one-hot encode
-sex_male = 1 if sex == "Male" else 0
-exang_val = 1 if exang == "Yes" else 0
-fbs_val = 1 if fbs == "Yes" else 0 # Renamed 'fbs' variable to 'fbs_val' to avoid conflict with the input variable
+# Initialize database on startup
+init_db()
 
-# Chest Pain
-cp_non_anginal_val = 1 if cp_non_anginal else 0
-cp_typical_angina_val = 1 if cp_typical_angina else 0
-cp_atypical_angina_val = 1 if cp_atypical_angina else 0
+# ── Shared CSS (applies to all pages via the browser session) ──────────────────
+st.markdown("""
+<style>
+    #MainMenu {visibility: hidden;}
+    footer    {visibility: hidden;}
 
-# Restecg
-restecg_st_t_abnormality = 1 if restecg_option == "ST-T Abnormality" else 0
-### ADDED: restecg_normal ###
-restecg_normal = 1 if restecg_option == "Normal" else 0
+    /* ── Sidebar ── */
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #1a1a2e 0%, #16213e 55%, #0f3460 100%);
+    }
+    [data-testid="stSidebar"] * { color: #f0f0f0 !important; }
+    [data-testid="stSidebar"] .stButton > button {
+        background: rgba(255,255,255,0.08);
+        border: 1px solid rgba(255,255,255,0.18);
+        color: white !important;
+        border-radius: 8px;
+    }
+    [data-testid="stSidebar"] .stButton > button:hover {
+        background: rgba(255,255,255,0.18);
+    }
 
-# Slope
-slope_upsloping_val = 1 if slope_option == "Upsloping" else 0
-### ADDED: slope_flat ###
-slope_flat_val = 1 if slope_option == "Flat" else 0
+    /* ── Stat cards ── */
+    .stat-card {
+        border-radius: 16px;
+        padding: 22px 16px;
+        color: white;
+        text-align: center;
+        margin-bottom: 6px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.12);
+    }
+    .stat-card h2  { font-size: 2.4rem; margin: 0; font-weight: 700; }
+    .stat-card p   { margin: 4px 0 0 0; opacity: 0.9; font-size: 0.95rem; }
+    .card-blue  { background: linear-gradient(135deg, #667eea, #764ba2); }
+    .card-green { background: linear-gradient(135deg, #43e97b, #38f9d7); color: #1a1a1a !important; }
+    .card-red   { background: linear-gradient(135deg, #f093fb, #f5576c); }
+    .card-cyan  { background: linear-gradient(135deg, #4facfe, #00f2fe); color: #1a1a1a !important; }
+    .card-green p, .card-cyan p { color: #1a1a1a !important; }
+
+    /* ── Result banners ── */
+    .result-positive {
+        background: linear-gradient(135deg, #f5576c, #f093fb);
+        color: white; border-radius: 12px;
+        padding: 20px; text-align: center; margin: 10px 0;
+    }
+    .result-negative {
+        background: linear-gradient(135deg, #43e97b, #38f9d7);
+        color: #1a1a1a; border-radius: 12px;
+        padding: 20px; text-align: center; margin: 10px 0;
+    }
+    .result-positive h2, .result-negative h2 { margin: 0; }
+
+    /* ── Patient card ── */
+    .patient-header {
+        background: white;
+        border-left: 5px solid #667eea;
+        border-radius: 8px;
+        padding: 12px 16px;
+        margin-bottom: 8px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    }
+</style>
+""", unsafe_allow_html=True)
 
 
-# build input dataframe
-# Ensure input_data columns are in the same order as during training
-# build input dataframe
-input_data = pd.DataFrame([{
-    "age": age,
-    "trestbps": trestbps,
-    "sex_Male": sex_male,
-    "chol": chol,
-    "thalch": thalch,
-    "oldpeak": oldpeak,
-    "exang": exang_val,
-    "cp_non-anginal": cp_non_anginal_val,
-    "cp_typical angina": cp_typical_angina_val,
-    "cp_atypical angina": cp_atypical_angina_val,
-    "restecg_normal": restecg_normal,
-    "restecg_st-t abnormality": restecg_st_t_abnormality,
-    "slope_upsloping": slope_upsloping_val,
-    "slope_flat": slope_flat_val,
-    "fbs": fbs_val
-}])
+# ── Auth helpers ───────────────────────────────────────────────────────────────
 
-# Ensure input_data columns are in the same order as during training
-feature_order = pipeline.feature_names_in_
-input_data = input_data[feature_order]
-if st.button("Predict"):
-    prediction = pipeline.predict(input_data)[0]
+def _is_logged_in() -> bool:
+    return st.session_state.get("logged_in", False)
 
-    if prediction == 1:
-        st.error("🚨 Prediction Result 🚨")
+
+def _show_login() -> None:
+    col_l, col_c, col_r = st.columns([1.5, 2, 1.5])
+    with col_c:
+        st.markdown("<br><br>", unsafe_allow_html=True)
         st.markdown(
-            "<h2 style='text-align: center; color: red;'>Heart Disease Detected</h2>",
-            unsafe_allow_html=True
+            "<h1 style='text-align:center;color:#e63946;'>❤️ CardioPredict</h1>"
+            "<p style='text-align:center;color:#666;font-size:1.1rem;'>"
+            "Heart Disease Risk Assessment System</p>",
+            unsafe_allow_html=True,
         )
-    else:
-        st.success("💚 Prediction Result 💚")
-        st.markdown(
-            "<h2 style='text-align: center; color: green;'>No Heart Disease</h2>",
-            unsafe_allow_html=True
-        )
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        tab_login, tab_register = st.tabs(["🔐  Login", "📝  Register"])
+
+        with tab_login:
+            with st.form("login_form"):
+                username = st.text_input("Username", placeholder="Enter your username")
+                password = st.text_input("Password", type="password", placeholder="Enter your password")
+                submitted = st.form_submit_button(
+                    "Login", use_container_width=True, type="primary"
+                )
+                if submitted:
+                    user = verify_user(username.strip(), password)
+                    if user:
+                        st.session_state.logged_in = True
+                        st.session_state.user = user
+                        st.rerun()
+                    else:
+                        st.error("Invalid username or password.")
+            st.caption("Default credentials: **admin** / **admin123**")
+
+        with tab_register:
+            with st.form("register_form", clear_on_submit=True):
+                r_name = st.text_input("Full Name *")
+                r_user = st.text_input("Username *")
+                r_email = st.text_input("Email (optional)")
+                r_spec = st.selectbox(
+                    "Specialization",
+                    ["Cardiology", "General Medicine", "Internal Medicine",
+                     "Emergency Medicine", "Other"],
+                )
+                r_pw  = st.text_input("Password *", type="password")
+                r_pw2 = st.text_input("Confirm Password *", type="password")
+                reg = st.form_submit_button("Create Account", use_container_width=True)
+                if reg:
+                    if not r_name or not r_user or not r_pw:
+                        st.error("Name, username, and password are required.")
+                    elif r_pw != r_pw2:
+                        st.error("Passwords do not match.")
+                    elif len(r_pw) < 6:
+                        st.error("Password must be at least 6 characters.")
+                    else:
+                        ok, msg = create_user(r_user.strip(), r_pw, r_name, r_email, r_spec)
+                        if ok:
+                            st.success(msg + " Please switch to the Login tab.")
+                        else:
+                            st.error(msg)
 
 
-# Example visualization
-st.subheader("Heart Disease Data Visualization")
+# ── Gate: show login if not authenticated ─────────────────────────────────────
+if not _is_logged_in():
+    _show_login()
+    st.stop()
 
-# Suppose input_data is your DataFrame with one row
-df = pd.DataFrame({
-    "Feature": input_data.columns,
-    "Value": input_data.iloc[0].values
-})
 
-fig = px.bar(df, x="Feature", y="Value", title="User Input Features")
-st.plotly_chart(fig, use_container_width=True)
-st.subheader("📊 Explore Heart Disease Trends")
+# ── Sidebar user info + logout ────────────────────────────────────────────────
+user = st.session_state.user
+with st.sidebar:
+    st.markdown(
+        f"<div style='padding:8px 0'>"
+        f"<h3 style='margin:0'>👨‍⚕️ Dr. {user['full_name']}</h3>"
+        f"<small>🏥 {user.get('specialization', 'General')}</small>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+    st.divider()
+    if st.button("🚪  Logout", use_container_width=True):
+        st.session_state.clear()
+        st.rerun()
 
-# Load your cleaned dataset (the one you trained your model on)
-# Note: You need to have 'cleaned_heart_data.csv' in the same directory for this part to work.
-try:
-    heart_df = pd.read_csv("cleaned_heart_data.csv")  # make sure this file has the 'num' column
 
-    # 1. Distribution of target variable
-    st.write("### Heart Disease Distribution")
-    fig, ax = plt.subplots()
-    sns.countplot(x="num", data=heart_df, ax=ax, palette="coolwarm")
-    ax.set_title("Heart Disease Cases (0 = No, 1 = Yes)")
-    st.pyplot(fig)
+# ── Multi-page navigation ─────────────────────────────────────────────────────
+dashboard = st.Page("pages/dashboard.py",  title="Dashboard",       icon="🏠", default=True)
+predict   = st.Page("pages/predict.py",    title="New Prediction",  icon="🔬")
+patients  = st.Page("pages/patients.py",   title="Patients",        icon="👥")
+history   = st.Page("pages/history.py",    title="Prediction History", icon="📋")
+analytics = st.Page("pages/analytics.py",  title="Analytics",       icon="📊")
 
-    # 2. Age vs. Heart Disease
-    st.write("### Age vs Heart Disease")
-    fig, ax = plt.subplots()
-    sns.histplot(data=heart_df, x="age", hue="num", multiple="stack", bins=20, ax=ax)
-    ax.set_title("Age Distribution by Heart Disease")
-    st.pyplot(fig)
-
-    # 3. Cholesterol vs Heart Disease
-    st.write("### Cholesterol Levels by Heart Disease")
-    fig, ax = plt.subplots()
-    sns.boxplot(x="num", y="chol", data=heart_df, ax=ax, palette="Set2")
-    ax.set_title("Cholesterol Levels (by Diagnosis)")
-    st.pyplot(fig)
-
-    # 4. Interactive Feature Correlation
-    st.write("### Feature Correlation Heatmap")
-    fig, ax = plt.subplots(figsize=(8,6))
-    # Ensure 'num' is an integer for correlation in case it's loaded as float
-    if 'num' in heart_df.columns:
-        heart_df['num'] = heart_df['num'].astype(int)
-    sns.heatmap(heart_df.corr(numeric_only=True), annot=True, cmap="coolwarm", fmt=".2f", ax=ax)
-    st.pyplot(fig)
-
-    feature = st.selectbox("Choose feature to compare with target", ["age", "chol", "thalch", "oldpeak"])
-    fig, ax = plt.subplots()
-    sns.boxplot(x="num", y=feature, data=heart_df, ax=ax)
-    st.pyplot(fig)
-except FileNotFoundError:
-    st.warning("Could not load 'cleaned_heart_data.csv'. Visualizations requiring the full dataset are disabled.")
+pg = st.navigation(
+    {"Main": [dashboard], "Clinical": [predict, patients, history], "Insights": [analytics]}
+)
+pg.run()

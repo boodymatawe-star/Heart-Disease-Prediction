@@ -3,7 +3,8 @@ pandas
 matplotlib
 seaborn
 scikit-learn
-streamlit
+streamlit>=1.36.0
 plotly
 jupyter
 pyngrok
+joblib
